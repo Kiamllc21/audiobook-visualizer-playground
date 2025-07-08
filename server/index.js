@@ -1,5 +1,5 @@
 // server/index.js — Whisper version
-
+const { extractKeywords } = require('./keywordService');
 const express  = require('express');
 const multer   = require('multer');
 const cors     = require('cors');
@@ -22,6 +22,17 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
   } catch (err) {
     console.error('Whisper error →', err);
     res.status(500).json({ error: 'Transcription failed' });
+  }
+});
+app.post('/keywords', express.json(), (req, res) => {
+  try {
+    const { text } = req.body;
+    if (!text) return res.status(400).json({ error: 'No text supplied' });
+    const keywords = extractKeywords(text);
+    res.json({ keywords });
+  } catch (err) {
+    console.error('Keyword error →', err);
+    res.status(500).json({ error: 'Extraction failed' });
   }
 });
 
