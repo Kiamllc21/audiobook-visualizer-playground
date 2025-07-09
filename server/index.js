@@ -10,33 +10,25 @@ const { extractKeywords } = require('./keywordService');
 const app = express();
 app.use(cors());
 const upload = multer();
-
 /* ─────────── 1.  /transcribe  ─────────── */
 app.post('/transcribe', upload.single('audio'), async (req, res) => {
   try {
-    /* guard: did Multer give us a file? */
     if (!req.file || !req.file.buffer) {
       return res.status(400).json({ error: 'No audio file received' });
     }
-
-    /* pull buffer + mimetype */
     const { buffer, mimetype } = req.file;
-
-    /* call Whisper ▼ */
-    const { text, words } = await transcribeAudio(buffer, mimetype);
+    const { text, words, chapters } = await transcribeAudio(buffer, mimetype);
 
     if (!text || !text.trim()) {
       return res.status(422).json({ error: 'Whisper returned empty transcript' });
     }
 
-    /* success */
-    res.json({ transcript: text, words });
+    res.json({ transcript: text, words, chapters });
   } catch (err) {
     console.error('Whisper error →', err);
     res.status(500).json({ error: 'Transcription failed' });
   }
 });
-
 /* ─────────── 2.  /keywords  ─────────── */
 app.post('/keywords', express.json(), (req, res) => {
   try {
