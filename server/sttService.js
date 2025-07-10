@@ -1,15 +1,28 @@
-/* server/sttService.js  — Day 8: verbose Whisper + pause-based chapters */
-const axios     = require('axios');
-const FormData  = require('form-data');
+/* ------------------------------------------------------------------
+   server/sttService.js  –  OpenAI Whisper upload helper
+-------------------------------------------------------------------*/
+const axios   = require('axios');
+const FormData = require('form-data');
+const https    = require('https');          // NEW
+
+// One agent reused for every request (keep-alive = faster / stabler TLS)
+const agent = new https.Agent({
+  keepAlive: true,
+  maxSockets: 5,          // don’t open hundreds of parallel sockets
+  timeout: 30_000         // 30 s safety timeout per request
+});
 
 /**
- * Whisper transcription + word-level timestamps + pause-based chapter cuts.
- * Returns { text, words:[…], chapters:[seconds,…] }
+ * Upload raw audio bytes to Whisper 1 and return
+ * { text, words:[ { word,start,end }, … ] }.
+ *
+ * @param {Buffer} buffer    Raw audio data
+ * @param {string} mimetype  e.g. "audio/mpeg"
  */
-async function transcribeAudio(buffer, mimetype) {
+async function transcribeAudio (buffer, mimetype) {
   const form = new FormData();
-  form.append('file',   buffer, { filename: 'audio', contentType: mimetype });
-  form.append('model',  'whisper-1');
+  form.append('file',  buffer, { filename:'audio', contentType:mimetype });
+  form.append('model', 'whisper-1');
   form.append('response_format', 'verbose_json');
   form.append('timestamp_granularities[]', 'word');
   form.append('language', 'en');
@@ -18,21 +31,17 @@ async function transcribeAudio(buffer, mimetype) {
     'https://api.openai.com/v1/audio/transcriptions',
     form,
     {
-      headers: { ...form.getHeaders(), Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
-      maxBodyLength: Infinity,
-      maxContentLength: Infinity,
-    },
+      httpsAgent: agent,                 // ✅ defined above
+      headers: {
+        ...form.getHeaders(),
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`
+      },
+      maxBodyLength:   Infinity,         // allow >10 MB files
+      maxContentLength: Infinity
+    }
   );
 
-  /* ----- chapter detection (≥ 2-second pauses) ----- */
-  const PAUSE_SEC = 2;
-  const cuts = [0];                        // always start at 0
-  for (let i = 1; i < data.words.length; i += 1) {
-    const gap = data.words[i].start - data.words[i - 1].end;
-    if (gap >= PAUSE_SEC) cuts.push(Math.floor(data.words[i].start));
-  }
-
-  return { text: data.text, words: data.words, chapters: cuts };
+  return data; // { text, words }
 }
 
 module.exports = { transcribeAudio };
