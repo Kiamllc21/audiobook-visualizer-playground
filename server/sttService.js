@@ -1,37 +1,38 @@
-/* server/sttService.js  – Whisper via axios (Day 6, timestamps) */
+/* server/sttService.js  — Day 8: verbose Whisper + pause-based chapters */
 const axios     = require('axios');
 const FormData  = require('form-data');
 
 /**
- * Uploads audio to OpenAI Whisper and returns the full
- * verbose-JSON response, including word-level timestamps.
- * @param {Buffer}  buffer   Raw audio bytes
- * @param {string}  mimetype e.g. "audio/mpeg"
- * @returns {Promise<{ text:string, words:Array }>}
+ * Whisper transcription + word-level timestamps + pause-based chapter cuts.
+ * Returns { text, words:[…], chapters:[seconds,…] }
  */
 async function transcribeAudio(buffer, mimetype) {
   const form = new FormData();
-  form.append('file', buffer, { filename: 'audio', contentType: mimetype });
-  form.append('model', 'whisper-1');
-  form.append('response_format', 'verbose_json');            // ⬅️ NEW
-  form.append('timestamp_granularities[]', 'word');          // ⬅️ NEW
+  form.append('file',   buffer, { filename: 'audio', contentType: mimetype });
+  form.append('model',  'whisper-1');
+  form.append('response_format', 'verbose_json');
+  form.append('timestamp_granularities[]', 'word');
   form.append('language', 'en');
 
   const { data } = await axios.post(
     'https://api.openai.com/v1/audio/transcriptions',
     form,
     {
-      headers: {
-        ...form.getHeaders(),
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      },
+      headers: { ...form.getHeaders(), Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
       maxBodyLength: Infinity,
       maxContentLength: Infinity,
     },
   );
 
-  /** data = { text: "…", words: [ { word,start,end }, … ] } */
-  return data;         // 🚩 return entire object, not just text
+  /* ----- chapter detection (≥ 2-second pauses) ----- */
+  const PAUSE_SEC = 2;
+  const cuts = [0];                        // always start at 0
+  for (let i = 1; i < data.words.length; i += 1) {
+    const gap = data.words[i].start - data.words[i - 1].end;
+    if (gap >= PAUSE_SEC) cuts.push(Math.floor(data.words[i].start));
+  }
+
+  return { text: data.text, words: data.words, chapters: cuts };
 }
 
 module.exports = { transcribeAudio };

@@ -1,5 +1,4 @@
-// react-client/src/App.jsx
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import {
   LineChart,
   Line,
@@ -9,68 +8,62 @@ import {
   Tooltip,
   Legend,
 } from 'recharts';
+import makeTimelineByTime from './utils/makeTimelineByTime';
 
-/* ---------- helpers ---------- */
-/**
- * Converts Whisper `words` (+ list of keywords) into 30-second
- * buckets, returning data shaped for Recharts.
- *
- * @param {Array}  wordsArr     Whisper words objects [{word,start,end}, …]
- * @param {Array}  keywordList  e.g. ['hero','journey','dragon']
- * @param {Number} bucketSec    bucket length in **seconds**
- */
-function makeTimelineByTime(wordsArr, keywordList, bucketSec = 30) {
-  const buckets = {};
-  wordsArr.forEach(({ word, start }) => {
-    const idx = keywordList.indexOf(word.toLowerCase());
-    if (idx === -1) return;                     // ignore non-keywords
-    const b = Math.floor(start / bucketSec);    // 0,1,2…
-    if (!buckets[b]) buckets[b] = { bucket: b };
-    const key = `kw${idx}`;                     // kw0, kw1, kw2
-    buckets[b][key] = (buckets[b][key] || 0) + 1;
-  });
-  return Object.values(buckets).sort((a, z) => a.bucket - z.bucket);
-}
-
+/* ------------------------------------------------------------------ */
+/*  React component                                                    */
+/* ------------------------------------------------------------------ */
 function App() {
-  /* ---------- React state ---------- */
-  const [file, setFile]         = useState(null);
-  const [text, setText]         = useState('');
+  /* ---------- state ---------- */
+  const [file, setFile] = useState(null);
+  const [audioURL, setAudioURL] = useState('');
+  const [text, setText] = useState('');
   const [keywords, setKeywords] = useState([]);
   const [timeline, setTimeline] = useState([]);
+  const audioRef = useRef(null);
 
-  /* ---------- handlers ---------- */
+  /* ---------- create / revoke object-URL for the player ---------- */
+  useEffect(() => {
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    setAudioURL(url);
+    return () => URL.revokeObjectURL(url); // cleanup when file changes
+  }, [file]);
+
+  /* ---------- main action ---------- */
   async function transcribe() {
     if (!file) {
       alert('Choose an audio file first.');
       return;
     }
 
-    /* 1️⃣  Whisper transcription (with word timestamps) */
+    /* 1️⃣ Whisper transcription (with word timestamps) */
     const form = new FormData();
     form.append('audio', file);
 
-    const tRes = await fetch('http://localhost:4000/transcribe', {
-      method: 'POST',
-      body: form,
-    }).then((r) => r.json());
+    const { transcript = '', words = [] } = await fetch(
+      'http://localhost:4000/transcribe',
+      { method: 'POST', body: form },
+    ).then((r) => r.json());
 
-    setText(tRes.transcript || '');
+    setText(transcript);
 
-    /* 2️⃣  Keyword extraction */
-    if (tRes.transcript) {
-      const kRes = await fetch('http://localhost:4000/keywords', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: tRes.transcript }),
-      }).then((r) => r.json());
+    /* 2️⃣ Keyword extraction */
+    if (transcript) {
+      const { keywords: kw = [] } = await fetch(
+        'http://localhost:4000/keywords',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: transcript }),
+        },
+      ).then((r) => r.json());
 
-      const kw = (kRes.keywords || []).slice(0, 3);   // take top-3
       setKeywords(kw);
 
-      /* 3️⃣  Build multi-keyword timeline */
-      if (kw.length && tRes.words) {
-        setTimeline(makeTimelineByTime(tRes.words, kw));
+      /* 3️⃣ Build a 30-second timeline for the *top* keyword */
+      if (kw.length > 0) {
+        setTimeline(makeTimelineByTime(words, kw[0], 30));
       } else {
         setTimeline([]);
       }
@@ -80,9 +73,24 @@ function App() {
     }
   }
 
+  /* ---------- click-to-seek handler ---------- */
+  function handleChartClick(state) {
+    if (!audioRef.current || !state?.activeLabel) return;
+    const bucketIndex = Number(state.activeLabel); // which 30-s bucket?
+    const seekTime = bucketIndex * 30;             // seconds
+    audioRef.current.currentTime = seekTime;
+    audioRef.current.play();
+  }
+
   /* ---------- UI ---------- */
   return (
-    <main style={{ padding: '2rem', fontFamily: 'system-ui' }}>
+    <main
+      style={{
+        padding: '1.5rem 2rem',
+        fontFamily: 'system-ui',
+        color: '#eaeaea',
+      }}
+    >
       <h1>Audiobook Visualizer Prototype</h1>
 
       <input
@@ -94,30 +102,54 @@ function App() {
         Transcribe
       </button>
 
-      {file && <p>Selected: {file.name}</p>}
+      {/* ---------- audio player ---------- */}
+      {file && audioURL && (
+        <div style={{ marginTop: '1rem' }}>
+          <audio
+            ref={audioRef}
+            controls
+            src={audioURL}
+            style={{ width: '100%' }}
+          />
+          <p style={{ marginTop: '0.5rem' }}>Selected: {file.name}</p>
+        </div>
+      )}
 
+      {/* ---------- transcript ---------- */}
       {text && (
         <>
           <h2>Transcript</h2>
-          <pre style={{ whiteSpace: 'pre-wrap', maxHeight: 300, overflowY: 'auto' }}>
+          <pre
+            style={{ whiteSpace: 'pre-wrap', maxHeight: '40vh', overflowY: 'auto' }}
+          >
             {text}
           </pre>
         </>
       )}
 
+      {/* ---------- keyword list ---------- */}
       <h2 style={{ marginTop: '2rem' }}>Top Keywords</h2>
-      {keywords.length ? (
-        <ul>{keywords.map((k) => <li key={k}>{k}</li>)}</ul>
+      {keywords.length > 0 ? (
+        <ul>
+          {keywords.map((k) => (
+            <li key={k}>{k}</li>
+          ))}
+        </ul>
       ) : (
-        <p style={{ opacity: 0.6 }}>
-          *(none detected – try a longer clip or check the server log)*
-        </p>
+        <p style={{ opacity: 0.6 }}>* (none detected)*</p>
       )}
 
+      {/* ---------- timeline chart ---------- */}
       {timeline.length > 0 && (
         <>
           <h2 style={{ marginTop: '2rem' }}>Keyword Timeline (30 s buckets)</h2>
-          <LineChart width={700} height={280} data={timeline}>
+          <LineChart
+            width={700}
+            height={260}
+            data={timeline}
+            onClick={handleChartClick}
+            style={{ cursor: 'pointer' }}
+          >
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis
               dataKey="bucket"
@@ -125,16 +157,19 @@ function App() {
             />
             <YAxis allowDecimals={false} />
             <Tooltip />
-            <Legend />
-            {keywords.map((_, idx) => (
-              <Line
-                key={`kw${idx}`}
-                type="monotone"
-                dataKey={`kw${idx}`}
-                strokeWidth={2}
-              />
-            ))}
+            <Legend verticalAlign="top" height={20} />
+            <Line
+              name={keywords[0]}
+              type="monotone"
+              dataKey="count"
+              stroke="#56b4e9"
+              strokeWidth={2}
+              dot={false}
+            />
           </LineChart>
+          <p style={{ fontSize: '0.85rem', opacity: 0.7 }}>
+            *Click any point to jump the audio to that 30-second slice.*
+          </p>
         </>
       )}
     </main>
